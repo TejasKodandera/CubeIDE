@@ -84,8 +84,8 @@ int main(void)
   /* USER CODE BEGIN 1 */
 	uint32_t lastSOL = 0;
 
-	int8_t dir[2] = { 1, 1 };
-	int16_t pwm[2] = { 0, 0 };
+	int8_t dir[2] = { 0 };
+	int16_t pwm[2] = { 0 };
 
 	char message[BUFFER_LENGTH + 20];
   /* USER CODE END 1 */
@@ -161,7 +161,7 @@ int main(void)
 						pwm[arrIndex] += (receivedStr[i] - '0') * multiplier;
 						multiplier *= 10;
 					} else if (receivedStr[i] == '-') {
-						dir[arrIndex] = -1;
+						dir[arrIndex] = 1;
 					} else if (receivedStr[i] == ',') {
 						arrIndex--;
 						multiplier = 1;
