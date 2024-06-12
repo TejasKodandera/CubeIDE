@@ -152,7 +152,7 @@ int main(void)
 				uint8_t multiplier = 1;
 
 				for (uint8_t i = 0; i < 2; i++) {
-					dir[i] = 1;
+					dir[i] = 0;
 					pwm[i] = 0;
 				}
 

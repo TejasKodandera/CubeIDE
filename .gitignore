@@ -38,6 +38,7 @@ workspace_1.15.1/
 #Workspace
 F411/Basics/.metadata/
 F411/Communications/.metadata/
+F411/Motor drivers/.metadata/
 F411/Remixes/.metadata/
 
 #Blink_LED
@@ -77,6 +78,29 @@ F411/Communications/USBD_Virtual_COM/USB_DEVICE/App/usb_device.h
 F411/Communications/USBD_Virtual_COM/USB_DEVICE/App/usbd_cdc_if.h
 F411/Communications/USBD_Virtual_COM/USB_DEVICE/App/usbd_desc.c
 F411/Communications/USBD_Virtual_COM/USB_DEVICE/App/usbd_desc.h
+
+#MDD10A
+F411/Motor drivers/MDD10A/.settings/
+F411/Motor drivers/MDD10A/Debug/
+F411/Motor drivers/MDD10A/Drivers/
+F411/Motor drivers/MDD10A/Middlewares/
+
+F411/Motor drivers/MDD10A/Core/Inc/
+F411/Motor drivers/MDD10A/Core/Startup/
+
+F411/Motor drivers/MDD10A/Core/Src/stm32f4xx_hal_msp.c
+F411/Motor drivers/MDD10A/Core/Src/stm32f4xx_it.c
+F411/Motor drivers/MDD10A/Core/Src/syscalls.c
+F411/Motor drivers/MDD10A/Core/Src/sysmem.c
+F411/Motor drivers/MDD10A/Core/Src/system_stm32f4xx.c
+
+F411/Motor drivers/MDD10A/USB_DEVICE/Target/
+
+F411/Motor drivers/MDD10A/USB_DEVICE/App/usb_device.c
+F411/Motor drivers/MDD10A/USB_DEVICE/App/usb_device.h
+F411/Motor drivers/MDD10A/USB_DEVICE/App/usbd_cdc_if.h
+F411/Motor drivers/MDD10A/USB_DEVICE/App/usbd_desc.c
+F411/Motor drivers/MDD10A/USB_DEVICE/App/usbd_desc.h
 
 #R2_PWM
 F411/Remixes/R2_PWM/.settings/
