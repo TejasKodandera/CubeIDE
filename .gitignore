@@ -102,6 +102,29 @@ F411/Motor drivers/MDD10A/USB_DEVICE/App/usbd_cdc_if.h
 F411/Motor drivers/MDD10A/USB_DEVICE/App/usbd_desc.c
 F411/Motor drivers/MDD10A/USB_DEVICE/App/usbd_desc.h
 
+#R2_PID_RPM
+F411/Remixes/R2_PID_RPM/.settings/
+F411/Remixes/R2_PID_RPM/Debug/
+F411/Remixes/R2_PID_RPM/Drivers/
+F411/Remixes/R2_PID_RPM/Middlewares/
+
+F411/Remixes/R2_PID_RPM/Core/Inc/
+F411/Remixes/R2_PID_RPM/Core/Startup/
+
+F411/Remixes/R2_PID_RPM/Core/Src/stm32f4xx_hal_msp.c
+F411/Remixes/R2_PID_RPM/Core/Src/stm32f4xx_it.c
+F411/Remixes/R2_PID_RPM/Core/Src/syscalls.c
+F411/Remixes/R2_PID_RPM/Core/Src/sysmem.c
+F411/Remixes/R2_PID_RPM/Core/Src/system_stm32f4xx.c
+
+F411/Remixes/R2_PID_RPM/USB_DEVICE/Target/
+
+F411/Remixes/R2_PID_RPM/USB_DEVICE/App/usb_device.c
+F411/Remixes/R2_PID_RPM/USB_DEVICE/App/usb_device.h
+F411/Remixes/R2_PID_RPM/USB_DEVICE/App/usbd_cdc_if.h
+F411/Remixes/R2_PID_RPM/USB_DEVICE/App/usbd_desc.c
+F411/Remixes/R2_PID_RPM/USB_DEVICE/App/usbd_desc.h
+
 #R2_PWM
 F411/Remixes/R2_PWM/.settings/
 F411/Remixes/R2_PWM/Debug/
