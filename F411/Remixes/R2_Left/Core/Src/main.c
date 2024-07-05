@@ -32,11 +32,11 @@
 typedef struct {
 	GPIO_TypeDef *PORT;
 	uint16_t PIN;
-	TIM_HandleTypeDef TIMER;
+	TIM_HandleTypeDef *TIMER;
 	uint32_t CHANNEL;
 	uint8_t DIR;
 	uint16_t PWM;
-} MOT_TypeDef;
+} MOTOR_TypeDef;
 
 /* USER CODE END PTD */
 
@@ -45,11 +45,8 @@ typedef struct {
 #define BUFFER_LENGTH 64
 #define SOL_INTERVAL 1000
 
-#define NO_OF_MOTORS 3
+#define NO_OF_MOTORS 4
 #define LEFT_SHIFT 8
-
-#define LS0_PIN GPIO_PIN_2
-#define LS1_PIN GPIO_PIN_10
 
 /* USER CODE END PD */
 
@@ -61,6 +58,7 @@ typedef struct {
 /* Private variables ---------------------------------------------------------*/
 TIM_HandleTypeDef htim1;
 TIM_HandleTypeDef htim2;
+TIM_HandleTypeDef htim3;
 TIM_HandleTypeDef htim4;
 
 /* USER CODE BEGIN PV */
@@ -69,7 +67,7 @@ char buffer[BUFFER_LENGTH];
 uint8_t leadPos = 2; //DON'T start the lead screw at an extreme position
 uint8_t errorFlag = 0;
 
-MOT_TypeDef motor[NO_OF_MOTORS];
+MOTOR_TypeDef motor[NO_OF_MOTORS];
 
 /* USER CODE END PV */
 
@@ -79,20 +77,13 @@ static void MX_GPIO_Init(void);
 static void MX_TIM1_Init(void);
 static void MX_TIM2_Init(void);
 static void MX_TIM4_Init(void);
+static void MX_TIM3_Init(void);
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-void stopRack() {
-	HAL_GPIO_TogglePin(motor[2].PORT, motor[2].PIN);
-	HAL_Delay(1000);
-
-	motor[2].PWM = 0;
-	TIM2->CCR1 = 0;
-}
-
 int isCleared(char *buffer) {
 	for (uint8_t i = 0; i < BUFFER_LENGTH; i++) {
 		if (buffer[i] != '\0') {
@@ -117,18 +108,23 @@ int main(void) {
 
 	motor[0].PORT = GPIOB;
 	motor[0].PIN = GPIO_PIN_12;
-	motor[0].TIMER = htim1;
+	motor[0].TIMER = &htim1;
 	motor[0].CHANNEL = TIM_CHANNEL_1;
 
 	motor[1].PORT = GPIOB;
 	motor[1].PIN = GPIO_PIN_14;
-	motor[1].TIMER = htim1;
+	motor[1].TIMER = &htim1;
 	motor[1].CHANNEL = TIM_CHANNEL_3;
 
 	motor[2].PORT = GPIOA;
 	motor[2].PIN = GPIO_PIN_4;
-	motor[2].TIMER = htim2;
+	motor[2].TIMER = &htim2;
 	motor[2].CHANNEL = TIM_CHANNEL_1;
+
+	motor[3].PORT = GPIOA;
+	motor[3].PIN = GPIO_PIN_6;
+	motor[3].TIMER = &htim3;
+	motor[3].CHANNEL = TIM_CHANNEL_2;
 
 	for (uint8_t i = 0; i < NO_OF_MOTORS; i++) {
 		motor[i].DIR = 0;
@@ -159,36 +155,38 @@ int main(void) {
 	MX_TIM2_Init();
 	MX_TIM4_Init();
 	MX_USB_DEVICE_Init();
+	MX_TIM3_Init();
 	/* USER CODE BEGIN 2 */
 	HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13, GPIO_PIN_RESET);
 
 	for (uint8_t i = 0; i < 2; i++) {
-		if ((HAL_TIMEx_PWMN_Start(&(motor[i].TIMER), motor[i].CHANNEL) == HAL_OK)) {
+		if ((HAL_TIMEx_PWMN_Start(motor[i].TIMER, motor[i].CHANNEL) == HAL_OK)) {
 			sprintf(message, "Motor %d PWM initialised\n\r", i);
 		} else {
 			sprintf(message, "Error initialising motor %d PWM\n\r", i);
 			errorFlag = 1;
 		}
 
-		HAL_GPIO_WritePin(motor[i].PORT, motor[i].PIN, GPIO_PIN_RESET);
-		__HAL_TIM_SET_COMPARE(&(motor[i].TIMER), motor[i].CHANNEL, 0);
+		CDC_Transmit_FS((uint8_t*) message, strlen(message));
+		HAL_Delay(1);
+	}
+
+	for (uint8_t i = 2; i < NO_OF_MOTORS; i++) {
+		if ((HAL_TIM_PWM_Start(motor[i].TIMER, motor[i].CHANNEL) == HAL_OK)) { //this is PWM not PWMN
+			sprintf(message, "Motor %d PWM initialised\n\r", i);
+		} else {
+			sprintf(message, "Error initialising motor %d PWM\n\r", i);
+			errorFlag = 1;
+		}
 
 		CDC_Transmit_FS((uint8_t*) message, strlen(message));
 		HAL_Delay(1);
 	}
 
-	if ((HAL_TIM_PWM_Start(&(motor[2].TIMER), motor[2].CHANNEL) == HAL_OK)) {	//this is PWM not PWMN
-		sprintf(message, "Motor 2 PWM initialised\n\r");
-	} else {
-		sprintf(message, "Error initialising motor 2 PWM\n\r");
-		errorFlag = 1;
+	for (uint8_t i = 0; i < NO_OF_MOTORS; i++) {
+		HAL_GPIO_WritePin(motor[i].PORT, motor[i].PIN, GPIO_PIN_RESET);
+		__HAL_TIM_SET_COMPARE(motor[i].TIMER, motor[i].CHANNEL, 0);
 	}
-
-	HAL_GPIO_WritePin(motor[2].PORT, motor[2].PIN, GPIO_PIN_RESET);
-	__HAL_TIM_SET_COMPARE(&(motor[2].TIMER), motor[2].CHANNEL, 0);
-
-	CDC_Transmit_FS((uint8_t*) message, strlen(message));
-	HAL_Delay(1);
 
 	if (!errorFlag) {
 		sprintf(message, "All systems operational\n\r");
@@ -241,27 +239,18 @@ int main(void) {
 						multiplier = 1;
 					}
 				}
-			} else if (receivedStr[0] == '3') {	//ESCALATE
-				if (leadPos != 0) {
-					motor[2].DIR = 0;
-					motor[2].PWM = 127;
-				}
-			} else if (receivedStr[0] == '4') {	//DESCALATE	who named this
-				if (leadPos != 1) {
-					motor[2].DIR = 1;
-					motor[2].PWM = 127;
-				}
-			}
 
-			for (uint8_t i = 0; i < NO_OF_MOTORS; i++) {
-				HAL_GPIO_WritePin(motor[i].PORT, motor[i].PIN, motor[i].DIR);
-				__HAL_TIM_SET_COMPARE(&(motor[i].TIMER), motor[i].CHANNEL,
-						motor[i].PWM << LEFT_SHIFT);
+				for (uint8_t i = 0; i < NO_OF_MOTORS; i++) {
+					HAL_GPIO_WritePin(motor[i].PORT, motor[i].PIN,
+							motor[i].DIR);
+					__HAL_TIM_SET_COMPARE(motor[i].TIMER, motor[i].CHANNEL,
+							motor[i].PWM << LEFT_SHIFT);
 
-				sprintf(message, "Dir%d: %d PWM%d: %d\n\r", i, motor[i].DIR, i,
-						motor[i].PWM);
-				CDC_Transmit_FS((uint8_t*) message, strlen(message));
-				HAL_Delay(1);	//Doesn't work without this line
+					sprintf(message, "Dir%d: %d PWM%d: %d\n\r", i, motor[i].DIR,
+							i, motor[i].PWM);
+					CDC_Transmit_FS((uint8_t*) message, strlen(message));
+					HAL_Delay(1);	//Doesn't work without this line
+				}
 			}
 
 			memset(buffer, '\0', BUFFER_LENGTH);
@@ -452,6 +441,61 @@ static void MX_TIM2_Init(void) {
 }
 
 /**
+ * @brief TIM3 Initialization Function
+ * @param None
+ * @retval None
+ */
+static void MX_TIM3_Init(void) {
+
+	/* USER CODE BEGIN TIM3_Init 0 */
+
+	/* USER CODE END TIM3_Init 0 */
+
+	TIM_ClockConfigTypeDef sClockSourceConfig = { 0 };
+	TIM_MasterConfigTypeDef sMasterConfig = { 0 };
+	TIM_OC_InitTypeDef sConfigOC = { 0 };
+
+	/* USER CODE BEGIN TIM3_Init 1 */
+
+	/* USER CODE END TIM3_Init 1 */
+	htim3.Instance = TIM3;
+	htim3.Init.Prescaler = 0;
+	htim3.Init.CounterMode = TIM_COUNTERMODE_UP;
+	htim3.Init.Period = 65535;
+	htim3.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+	htim3.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+	if (HAL_TIM_Base_Init(&htim3) != HAL_OK) {
+		Error_Handler();
+	}
+	sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
+	if (HAL_TIM_ConfigClockSource(&htim3, &sClockSourceConfig) != HAL_OK) {
+		Error_Handler();
+	}
+	if (HAL_TIM_PWM_Init(&htim3) != HAL_OK) {
+		Error_Handler();
+	}
+	sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
+	sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
+	if (HAL_TIMEx_MasterConfigSynchronization(&htim3, &sMasterConfig)
+			!= HAL_OK) {
+		Error_Handler();
+	}
+	sConfigOC.OCMode = TIM_OCMODE_PWM1;
+	sConfigOC.Pulse = 0;
+	sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
+	sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
+	if (HAL_TIM_PWM_ConfigChannel(&htim3, &sConfigOC, TIM_CHANNEL_2)
+			!= HAL_OK) {
+		Error_Handler();
+	}
+	/* USER CODE BEGIN TIM3_Init 2 */
+
+	/* USER CODE END TIM3_Init 2 */
+	HAL_TIM_MspPostInit(&htim3);
+
+}
+
+/**
  * @brief TIM4 Initialization Function
  * @param None
  * @retval None
@@ -513,7 +557,7 @@ static void MX_GPIO_Init(void) {
 	HAL_GPIO_WritePin(LED_GPIO_Port, LED_Pin, GPIO_PIN_RESET);
 
 	/*Configure GPIO pin Output Level */
-	HAL_GPIO_WritePin(MOT2_Dir_GPIO_Port, MOT2_Dir_Pin, GPIO_PIN_RESET);
+	HAL_GPIO_WritePin(GPIOA, MOT2_Dir_Pin | MOT3_Dir_Pin, GPIO_PIN_RESET);
 
 	/*Configure GPIO pin Output Level */
 	HAL_GPIO_WritePin(GPIOB, MOT0_Dir_Pin | MOT1_Dir_Pin, GPIO_PIN_RESET);
@@ -525,18 +569,12 @@ static void MX_GPIO_Init(void) {
 	GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
 	HAL_GPIO_Init(LED_GPIO_Port, &GPIO_InitStruct);
 
-	/*Configure GPIO pin : MOT2_Dir_Pin */
-	GPIO_InitStruct.Pin = MOT2_Dir_Pin;
+	/*Configure GPIO pins : MOT2_Dir_Pin MOT3_Dir_Pin */
+	GPIO_InitStruct.Pin = MOT2_Dir_Pin | MOT3_Dir_Pin;
 	GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
 	GPIO_InitStruct.Pull = GPIO_NOPULL;
 	GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-	HAL_GPIO_Init(MOT2_Dir_GPIO_Port, &GPIO_InitStruct);
-
-	/*Configure GPIO pins : LS0_Pin LS1_Pin */
-	GPIO_InitStruct.Pin = LS0_Pin | LS1_Pin;
-	GPIO_InitStruct.Mode = GPIO_MODE_IT_FALLING;
-	GPIO_InitStruct.Pull = GPIO_PULLUP;
-	HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+	HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
 	/*Configure GPIO pins : MOT0_Dir_Pin MOT1_Dir_Pin */
 	GPIO_InitStruct.Pin = MOT0_Dir_Pin | MOT1_Dir_Pin;
@@ -544,13 +582,6 @@ static void MX_GPIO_Init(void) {
 	GPIO_InitStruct.Pull = GPIO_NOPULL;
 	GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
 	HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
-
-	/* EXTI interrupt init*/
-	HAL_NVIC_SetPriority(EXTI2_IRQn, 0, 0);
-	HAL_NVIC_EnableIRQ(EXTI2_IRQn);
-
-	HAL_NVIC_SetPriority(EXTI15_10_IRQn, 0, 0);
-	HAL_NVIC_EnableIRQ(EXTI15_10_IRQn);
 
 	/* USER CODE BEGIN MX_GPIO_Init_2 */
 	/* USER CODE END MX_GPIO_Init_2 */
@@ -562,18 +593,6 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
 		HAL_GPIO_TogglePin(GPIOC, GPIO_PIN_13);
 	}
 
-}
-
-void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
-	if (GPIO_Pin == LS0_PIN) {
-		leadPos = 0;
-		HAL_GPIO_TogglePin(GPIOC, GPIO_PIN_13);
-		stopRack();
-	} else if (GPIO_Pin == LS1_PIN) {
-		leadPos = 1;
-		HAL_GPIO_TogglePin(GPIOC, GPIO_PIN_13);
-		stopRack();
-	}
 }
 
 /* USER CODE END 4 */

@@ -43,25 +43,50 @@ typedef struct {
 	uint32_t CHANNEL;
 	uint16_t US;
 } SERVO_TypeDef;
+
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
 #define BUFFER_LENGTH 64
 #define SOL_INTERVAL 10000
-#define LEFT_SHIFT 8
+#define LEFT_SHIFT
 
 #define LS0_PIN GPIO_PIN_0	//LEAD
 #define LS1_PIN GPIO_PIN_1	//LEAD
 #define LS2_PIN GPIO_PIN_2	//RACK
 #define LS3_PIN GPIO_PIN_10	//RACK
 
+#define RACK_SPEED  19660//3276
+#define LEAD_SPEED  45874//19660//3276
+
+#define RACK_COOLDOWN 100
+#define LEAD_COOLDOWN 100
+
+#define WRIST_DEFAULT 2000
+#define WRIST_ACTIVE 650
+
+#define GRIPPER_DEFAULT 1400
+#define GRIPPER_ACTIVE 1100
+
 enum motors {
-	LEAD, RACK
+	RACK, LEAD
 };
 
 enum servos {
 	WRIST, GRIPPER
+};
+
+enum interrupts {
+	DISABLED, ENABLED
+};
+
+enum rackDirs {
+	FORWARDS, BACKWARDS
+};
+
+enum leadDirs {
+	UPWARDS, DOWNWARDS
 };
 /* USER CODE END PD */
 
@@ -78,10 +103,15 @@ TIM_HandleTypeDef htim4;
 /* USER CODE BEGIN PV */
 char buffer[BUFFER_LENGTH];
 
-volatile uint8_t rackPos = 2; //DON'T state the rack at an extreme position
-volatile uint8_t leadPos = 2; //Read the above comment. Replace rack with lead
+//For rackExti and leadExti:
+//0: interrupt disabled
+//1: interrupt enabled
+volatile uint8_t rackExti = ENABLED; //make sure rack limit switches are NOT pressed at startuo
+volatile uint8_t leadExti = ENABLED; //make sure lead limit switches are NOT pressed at startuo
 
 uint8_t errorFlag = 0;
+
+char message[BUFFER_LENGTH + 20];
 
 MOTOR_TypeDef motor[2];
 SERVO_TypeDef servo[2];
@@ -100,18 +130,11 @@ static void MX_TIM4_Init(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-void stopMotor(uint8_t index) {
-	HAL_GPIO_TogglePin(motor[index].PORT, motor[index].PIN);
-	HAL_Delay(1000);
-
-	motor[index].PWM = 0;
-
-	if (index) {
-		TIM1->CCR3 = 0;
-	} else if (!index) {
-		TIM1->CCR1 = 0;
-	}
-}
+//void stopMotor(uint8_t index) {
+//	HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13, GPIO_PIN_SET);
+//	sprintf(message, "Motor %d interrupt\n\r", index);
+//	CDC_Transmit_FS((uint8_t*) message, strlen(message));
+//}
 
 int isCleared(char *buffer) {
 	for (uint8_t i = 0; i < BUFFER_LENGTH; i++) {
@@ -131,30 +154,28 @@ int isCleared(char *buffer) {
 int main(void) {
 
 	/* USER CODE BEGIN 1 */
-	uint32_t lastSOL = 0;
-
-	char message[BUFFER_LENGTH + 20];
-
+//	uint32_t lastSOL = 0;
 	motor[LEAD].PORT = GPIOB;
-	motor[LEAD].PIN = GPIO_PIN_12;
+	motor[LEAD].PIN = GPIO_PIN_14;
 	motor[LEAD].TIMER = &htim1;
-	motor[LEAD].CHANNEL = TIM_CHANNEL_1;
+	motor[LEAD].CHANNEL = TIM_CHANNEL_3;
 
 	motor[RACK].PORT = GPIOB;
-	motor[RACK].PIN = GPIO_PIN_14;
+	motor[RACK].PIN = GPIO_PIN_12;
 	motor[RACK].TIMER = &htim1;
-	motor[RACK].CHANNEL = TIM_CHANNEL_3;
+	motor[RACK].CHANNEL = TIM_CHANNEL_1;
 
 	servo[WRIST].TIMER = &htim3;
 	servo[WRIST].CHANNEL = TIM_CHANNEL_1;
+	servo[WRIST].US = WRIST_DEFAULT;
 
 	servo[GRIPPER].TIMER = &htim3;
 	servo[GRIPPER].CHANNEL = TIM_CHANNEL_2;
+	servo[GRIPPER].US = GRIPPER_DEFAULT;
 
 	for (uint8_t i = 0; i < 2; i++) {
 		motor[i].DIR = 0;
 		motor[i].PWM = 0;
-		servo[i].US = 1000;
 	}
 
 	/* USER CODE END 1 */
@@ -177,10 +198,10 @@ int main(void) {
 
 	/* Initialize all configured peripherals */
 	MX_GPIO_Init();
-	MX_USB_DEVICE_Init();
 	MX_TIM1_Init();
 	MX_TIM3_Init();
 	MX_TIM4_Init();
+	MX_USB_DEVICE_Init();
 	/* USER CODE BEGIN 2 */
 	HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13, GPIO_PIN_RESET);
 
@@ -218,79 +239,210 @@ int main(void) {
 		HAL_Delay(1);
 	}
 
+	__HAL_TIM_SET_COMPARE(servo[WRIST].TIMER, servo[WRIST].CHANNEL,
+			WRIST_DEFAULT);
+	__HAL_TIM_SET_COMPARE(servo[GRIPPER].TIMER, servo[GRIPPER].CHANNEL,
+			GRIPPER_DEFAULT);
 	/* USER CODE END 2 */
 
 	/* Infinite loop */
 	/* USER CODE BEGIN WHILE */
 	while (1) {
-		uint32_t current_time = HAL_GetTick();
+//		uint32_t current_time = HAL_GetTick();
+
+		if (leadExti == DISABLED) {
+			if (motor[LEAD].DIR == 0) {
+				motor[LEAD].DIR = 1;
+			} else if (motor[LEAD].DIR == 1) {
+				motor[LEAD].DIR = 0;
+			}
+			HAL_GPIO_TogglePin(motor[LEAD].PORT, motor[LEAD].PIN);
+			HAL_Delay(LEAD_COOLDOWN);
+			motor[LEAD].PWM = 0;
+			__HAL_TIM_SET_COMPARE(motor[LEAD].TIMER, motor[LEAD].CHANNEL,
+					motor[LEAD].PWM);
+
+			leadExti = ENABLED;	//Re-enabling the interrupts
+			HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13, GPIO_PIN_RESET);
+		}
+
+		if (rackExti == DISABLED) {
+			if (motor[RACK].DIR == 0) {
+				motor[RACK].DIR = 1;
+			} else if (motor[RACK].DIR == 1) {
+				motor[RACK].DIR = 0;
+			}
+			HAL_GPIO_TogglePin(motor[RACK].PORT, motor[RACK].PIN);
+			HAL_Delay(RACK_COOLDOWN);
+			motor[RACK].PWM = 0;
+			__HAL_TIM_SET_COMPARE(motor[RACK].TIMER, motor[RACK].CHANNEL,
+					motor[RACK].PWM);
+
+			rackExti = ENABLED;	//Re-enabling the interrupts
+			HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13, GPIO_PIN_RESET);
+		}
 
 		if (!isCleared(buffer)) {
 			char receivedStr[BUFFER_LENGTH];
 
-			sprintf(message, "String Received: %s\n\r", buffer);
-			CDC_Transmit_FS((uint8_t*) message, strlen(message));
+//			sprintf(message, "String Received: %s\n\r", buffer);
+//			CDC_Transmit_FS((uint8_t*) message, strlen(message));
 
 			sprintf(receivedStr, "%s", buffer);
-//			uint8_t receivedStrlen = strlen(receivedStr);
 
-			if (receivedStr[0] == '1') {	//EXTEND
-				if (rackPos != 0) {
-					motor[RACK].DIR = 0;
-					motor[RACK].PWM = 127;
+			if (receivedStr[0] == '0') {	//RESET
+				sprintf(message, "0 \r\n");
+				CDC_Transmit_FS((uint8_t*) message, strlen(message));
+				HAL_Delay(1);
+
+//				for (uint8_t i = 0; i < 2; i++) {
+//					motor[i].DIR = 0;
+//					motor[i].PWM = 0;
+//				}
+//
+//				servo[WRIST].US = WRIST_DEFAULT;
+//				servo[GRIPPER].US = GRIPPER_DEFAULT;
+			} else if (receivedStr[0] == '1') {	//RETRACT
+				if (rackExti == ENABLED) {
+					sprintf(message, "-1 \r\n");
+					CDC_Transmit_FS((uint8_t*) message, strlen(message));
+					HAL_Delay(1);
+
+					HAL_GPIO_WritePin(motor[RACK].PORT, motor[RACK].PIN,
+							BACKWARDS);
+					__HAL_TIM_SET_COMPARE(motor[RACK].TIMER,
+							motor[RACK].CHANNEL, RACK_SPEED);
+
 				}
-			} else if (receivedStr[0] == '2') {	//RETRACT
-				if (rackPos != 1) {
-					motor[RACK].DIR = 1;
-					motor[RACK].PWM = 127;
+			} else if (receivedStr[0] == '2') {	//EXTEND
+				if (rackExti == ENABLED) {
+					sprintf(message, "-2 \r\n");
+					CDC_Transmit_FS((uint8_t*) message, strlen(message));
+					HAL_Delay(1);
+
+					HAL_GPIO_WritePin(motor[RACK].PORT, motor[RACK].PIN,
+							FORWARDS);
+					__HAL_TIM_SET_COMPARE(motor[RACK].TIMER,
+							motor[RACK].CHANNEL, RACK_SPEED);
+
 				}
-			} else if (receivedStr[0] == '3') {	//ESCALATE
-				if (rackPos != 0) {
-					motor[LEAD].DIR = 0;
-					motor[LEAD].PWM = 127;
+			} else if (receivedStr[0] == '3') {	//DESCALATE
+				if (leadExti == ENABLED) {
+					sprintf(message, "-3 \r\n");
+					CDC_Transmit_FS((uint8_t*) message, strlen(message));
+					HAL_Delay(1);
+
+					HAL_GPIO_WritePin(motor[LEAD].PORT, motor[LEAD].PIN,
+							DOWNWARDS);
+					__HAL_TIM_SET_COMPARE(motor[LEAD].TIMER,
+							motor[LEAD].CHANNEL, LEAD_SPEED);
+
 				}
-			} else if (receivedStr[0] == '4') {	//DESCALATE
-				if (rackPos != 1) {
-					motor[LEAD].DIR = 1;
-					motor[LEAD].PWM = 127;
+			} else if (receivedStr[0] == '4') {	//ESCALATE
+				if (leadExti == ENABLED) {
+					sprintf(message, "-4 \r\n");
+					CDC_Transmit_FS((uint8_t*) message, strlen(message));
+					HAL_Delay(1);
+
+					HAL_GPIO_WritePin(motor[LEAD].PORT, motor[LEAD].PIN,
+							UPWARDS);
+					__HAL_TIM_SET_COMPARE(motor[LEAD].TIMER,
+							motor[LEAD].CHANNEL, LEAD_SPEED);
+
 				}
 			} else if (receivedStr[0] == '5') {	//ARM_DOWN
-				servo[WRIST].US = 1000;
-			} else if (receivedStr[0] == '6') {	//ARM_UP
-				servo[WRIST].US = 2000;
-			} else if (receivedStr[0] == '7') {	//ARM_CLOSE
-				servo[GRIPPER].US = 1000;
-			} else if (receivedStr[0] == '8') {	//ARM_OPEN
-				servo[GRIPPER].US = 2000;
-			} else if (receivedStr[0] == '9') {	//HALF_DESCALATE: DON'T EVER use this as the 1st command after startup
-				__HAL_TIM_SET_COMPARE(motor[LEAD].TIMER, motor[LEAD].CHANNEL,
-						32767);
+				sprintf(message, "5 \r\n");
+				CDC_Transmit_FS((uint8_t*) message, strlen(message));
+				HAL_Delay(1);
+
+				__HAL_TIM_SET_COMPARE(servo[WRIST].TIMER, servo[WRIST].CHANNEL,
+						WRIST_ACTIVE);
+
 				HAL_Delay(1000);
-				__HAL_TIM_SET_COMPARE(motor[LEAD].TIMER, motor[LEAD].CHANNEL,
-						0);
+				sprintf(message, "-5 \r\n");
+				CDC_Transmit_FS((uint8_t*) message, strlen(message));
+				HAL_Delay(1);
+
+			} else if (receivedStr[0] == '6') {	//ARM_UP
+				sprintf(message, "6 \r\n");
+				CDC_Transmit_FS((uint8_t*) message, strlen(message));
+				HAL_Delay(1);
+
+				__HAL_TIM_SET_COMPARE(servo[WRIST].TIMER, servo[WRIST].CHANNEL,
+						WRIST_DEFAULT);
+
+				HAL_Delay(1000);
+				sprintf(message, "-6 \r\n");
+				CDC_Transmit_FS((uint8_t*) message, strlen(message));
+				HAL_Delay(1);
+
+			} else if (receivedStr[0] == '7') {	//ARM_CLOSE
+				sprintf(message, "7 \r\n");
+				CDC_Transmit_FS((uint8_t*) message, strlen(message));
+				HAL_Delay(1);
+
+				__HAL_TIM_SET_COMPARE(servo[GRIPPER].TIMER,
+						servo[GRIPPER].CHANNEL, GRIPPER_ACTIVE);
+
+				HAL_Delay(500);
+				sprintf(message, "-7 \r\n");
+				CDC_Transmit_FS((uint8_t*) message, strlen(message));
+				HAL_Delay(1);
+
+			} else if (receivedStr[0] == '8') {	//ARM_OPEN
+				sprintf(message, "8 \r\n");
+				CDC_Transmit_FS((uint8_t*) message, strlen(message));
+				HAL_Delay(1);
+
+				__HAL_TIM_SET_COMPARE(servo[GRIPPER].TIMER,
+						servo[GRIPPER].CHANNEL, GRIPPER_DEFAULT);
+
+				HAL_Delay(500);
+				sprintf(message, "-8 \r\n");
+				CDC_Transmit_FS((uint8_t*) message, strlen(message));
+				HAL_Delay(1);
+
+//			} else if (receivedStr[0] == '9') {	//HALF_DESCALATE: DON'T EVER use this as the 1st command after startup
+//				__HAL_TIM_SET_COMPARE(motor[LEAD].TIMER, motor[LEAD].CHANNEL,
+//						LEAD_SPEED);
+//				HAL_Delay(1000);
+//				__HAL_TIM_SET_COMPARE(motor[LEAD].TIMER, motor[LEAD].CHANNEL,
+//						0);
+//			} else if (receivedStr[0] == 'D') {
+//				for (uint8_t i = 0; i < 2; i++) {
+//					sprintf(message, "Dir%d: %d PWM%d: %d SER%d: %d\n\r", i,
+//							motor[i].DIR, i, motor[i].PWM, i, servo[i].US);
+//					CDC_Transmit_FS((uint8_t*) message, strlen(message));
+//					HAL_Delay(1);
+//				}
 			}
 
-			for (uint8_t i = 0; i < 2; i++) {
-				sprintf(message, "Dir%d: %d PWM%d: %d SER%d: %d\n\r", i,
-						motor[i].DIR, i, motor[i].PWM, i, servo[i].US);
-				CDC_Transmit_FS((uint8_t*) message, strlen(message));
+//			sprintf(message, "%c \r\n", receivedStr[0]);
+//			CDC_Transmit_FS((uint8_t*) message, strlen(message));
+//			HAL_Delay(1);
 
-				HAL_GPIO_WritePin(motor[i].PORT, motor[i].PIN, motor[i].DIR);//<-MOTORS HERE
-				__HAL_TIM_SET_COMPARE(motor[i].TIMER, motor[i].CHANNEL,
-						motor[i].PWM << LEFT_SHIFT);
-				__HAL_TIM_SET_COMPARE(servo[i].TIMER, servo[i].CHANNEL,
-						servo[i].US);
+//			for (uint8_t i = 0; i < 2; i++) {
+//				sprintf(message, "Dir%d: %d PWM%d: %d SER%d: %d\n\r", i,
+//						motor[i].DIR, i, motor[i].PWM, i, servo[i].US);
+//				CDC_Transmit_FS((uint8_t*) message, strlen(message));
+//				HAL_Delay(1);
 
+//				HAL_GPIO_WritePin(motor[i].PORT, motor[i].PIN, motor[i].DIR);//<-MOTORS HERE
+//				__HAL_TIM_SET_COMPARE(motor[i].TIMER, motor[i].CHANNEL,
+//						motor[i].PWM);
+//				__HAL_TIM_SET_COMPARE(servo[i].TIMER, servo[i].CHANNEL,
+//						servo[i].US);
 			}
 
 			memset(buffer, '\0', BUFFER_LENGTH);
 
-		} else if (current_time - lastSOL >= SOL_INTERVAL) {
-			CDC_Transmit_FS((uint8_t*) "SOL\n\r", strlen("SOL\n\r"));
-			lastSOL = current_time;
-		}
+//		} else if (current_time - lastSOL >= SOL_INTERVAL) {
+//			CDC_Transmit_FS((uint8_t*) "SOL\n\r", strlen("SOL\n\r"));
+//			lastSOL = current_time;
+//		}
 
 		HAL_Delay(1);
+
 		/* USER CODE END WHILE */
 
 		/* USER CODE BEGIN 3 */
@@ -309,7 +461,7 @@ void SystemClock_Config(void) {
 	/** Configure the main internal regulator output voltage
 	 */
 	__HAL_RCC_PWR_CLK_ENABLE();
-	__HAL_PWR_VOLTAGESCALING_CONFIG(PWR_REGULATOR_VOLTAGE_SCALE1);
+	__HAL_PWR_VOLTAGESCALING_CONFIG(PWR_REGULATOR_VOLTAGE_SCALE2);
 
 	/** Initializes the RCC Oscillators according to the specified parameters
 	 * in the RCC_OscInitTypeDef structure.
@@ -319,9 +471,9 @@ void SystemClock_Config(void) {
 	RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
 	RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSE;
 	RCC_OscInitStruct.PLL.PLLM = 25;
-	RCC_OscInitStruct.PLL.PLLN = 192;
+	RCC_OscInitStruct.PLL.PLLN = 144;
 	RCC_OscInitStruct.PLL.PLLP = RCC_PLLP_DIV2;
-	RCC_OscInitStruct.PLL.PLLQ = 4;
+	RCC_OscInitStruct.PLL.PLLQ = 3;
 	if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK) {
 		Error_Handler();
 	}
@@ -335,7 +487,7 @@ void SystemClock_Config(void) {
 	RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV2;
 	RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV1;
 
-	if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_3) != HAL_OK) {
+	if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_2) != HAL_OK) {
 		Error_Handler();
 	}
 }
@@ -434,7 +586,7 @@ static void MX_TIM3_Init(void) {
 
 	/* USER CODE END TIM3_Init 1 */
 	htim3.Instance = TIM3;
-	htim3.Init.Prescaler = 95;
+	htim3.Init.Prescaler = 71;
 	htim3.Init.CounterMode = TIM_COUNTERMODE_UP;
 	htim3.Init.Period = 20000;
 	htim3.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
@@ -492,7 +644,7 @@ static void MX_TIM4_Init(void) {
 
 	/* USER CODE END TIM4_Init 1 */
 	htim4.Instance = TIM4;
-	htim4.Init.Prescaler = 95;
+	htim4.Init.Prescaler = 71;
 	htim4.Init.CounterMode = TIM_COUNTERMODE_UP;
 	htim4.Init.Period = 1000;
 	htim4.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
@@ -583,22 +735,18 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
 }
 
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
-	if (GPIO_Pin == LS0_PIN) {
-		leadPos = 0;
-		HAL_GPIO_TogglePin(GPIOC, GPIO_PIN_13);
-		stopMotor(LEAD);
-	} else if (GPIO_Pin == LS1_PIN) {
-		leadPos = 1;
-		HAL_GPIO_TogglePin(GPIOC, GPIO_PIN_13);
-		stopMotor(LEAD);
-	} else if (GPIO_Pin == LS2_PIN) {
-		rackPos = 0;
-		HAL_GPIO_TogglePin(GPIOC, GPIO_PIN_13);
-		stopMotor(RACK);
-	} else if (GPIO_Pin == LS3_PIN) {
-		rackPos = 1;
-		HAL_GPIO_TogglePin(GPIOC, GPIO_PIN_13);
-		stopMotor(RACK);
+	if (GPIO_Pin == LS0_PIN || GPIO_Pin == LS1_PIN) {			//for lead
+		if (leadExti == ENABLED) {
+			leadExti = DISABLED;//disabling the interrupt to prevent bouncing
+//			stopMotor(LEAD);
+			HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13, GPIO_PIN_SET);
+		}
+	} else if (GPIO_Pin == LS2_PIN || GPIO_Pin == LS3_PIN) {	//for rack
+		if (rackExti == ENABLED) {
+			rackExti = DISABLED;//disabling the interrupt to prevent bouncing
+//			stopMotor(RACK);
+			HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13, GPIO_PIN_SET);
+		}
 	}
 }
 
